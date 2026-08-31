@@ -1,0 +1,64 @@
+name: Collect ActiveSG pool crowd
+
+on:
+  schedule:
+    # Every 20 minutes. GitHub runs this in UTC, but since it's an
+    # interval rather than a fixed time, timezone doesn't matter.
+    - cron: "*/20 * * * *"
+  workflow_dispatch:        # lets you press "Run workflow" manually
+
+# Allow the job to push data.csv back to the repo
+permissions:
+  contents: write
+
+# Never let two runs overwrite each other
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install requests
+        run: pip install --quiet requests
+
+      - name: Poll ActiveSG
+        env:
+          # Optional: set this as a repo variable if auto-discovery fails.
+          ACTIVESG_ENDPOINT: ${{ vars.ACTIVESG_ENDPOINT }}
+          VENUES: "Delta,Queenstown"
+        run: python collect.py
+
+      - name: Commit new rows
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- data.csv; then
+            echo "No change, nothing to commit."
+            exit 0
+          fi
+
+          git add data.csv
+          git commit -m "data: $(date -u '+%Y-%m-%d %H:%M') UTC [skip ci]"
+
+          # Another run may have pushed while we were working; rebase and retry.
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && \
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            echo "Push attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "Could not push after 3 attempts." >&2
+          exit 1
