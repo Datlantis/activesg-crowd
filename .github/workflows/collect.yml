@@ -37,7 +37,7 @@ jobs:
         env:
           # Optional: set this as a repo variable if auto-discovery fails.
           ACTIVESG_ENDPOINT: ${{ vars.ACTIVESG_ENDPOINT }}
-          VENUES: "Delta,Queenstown"
+          VENUES: "Delta Swimming,Queenstown Swimming"
         run: python collect.py
 
       - name: Commit new rows
