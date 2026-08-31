@@ -19,6 +19,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -29,14 +30,18 @@ CSV_PATH = os.environ.get("CSV_PATH", "data.csv")
 # Which venues to keep. Substring match, case-insensitive.
 # Set TRACK_ALL=1 to record every venue in the feed instead.
 VENUES = [v.strip() for v in os.environ.get(
-    "VENUES", "Delta,Queenstown").split(",") if v.strip()]
+    "VENUES", "Delta Swimming,Queenstown Swimming").split(",") if v.strip()]
+
+# The real endpoint, found via DevTools: a tRPC procedure that takes no
+# arguments. The input param is superjson's encoding of `undefined`.
+TRPC_INPUT = '{"json":null,"meta":{"values":["undefined"]}}'
+PROC = "pass.getFacilityCapacities"
 
 CANDIDATES = [
-    "https://activesg.gov.sg/api/crowd",
-    "https://activesg.gov.sg/api/crowd-levels",
-    "https://activesg.gov.sg/api/facilities/crowd",
-    "https://activesg.gov.sg/api/gym-pool-crowd",
-    "https://activesg.gov.sg/api/v1/crowd",
+    f"https://activesg.gov.sg/api/trpc/{PROC}?input={quote(TRPC_INPUT)}",
+    # Fallbacks in case the router prefix differs from the standard one.
+    f"https://activesg.gov.sg/trpc/{PROC}?input={quote(TRPC_INPUT)}",
+    f"https://activesg.gov.sg/api/{PROC}?input={quote(TRPC_INPUT)}",
 ]
 
 HEADERS = {
@@ -84,7 +89,13 @@ def extract(obj, out=None):
         crowd_k = next((keys[k] for k in keys
                         if any(c in k for c in CROWD_KEYS)), None)
         if name_k and crowd_k and isinstance(obj[name_k], str):
-            level = obj[crowd_k] if isinstance(obj[crowd_k], str) else None
+            # Find the descriptive level on its own key — the generic crowd-key
+            # scan may well have landed on `capacity` instead.
+            level = next((obj[keys[k]] for k in keys
+                          if ("level" in k or "status" in k or "crowd" in k)
+                          and isinstance(obj[keys[k]], str)), None)
+            if level is None and isinstance(obj[crowd_k], str):
+                level = obj[crowd_k]
             head = next((obj[keys[k]] for k in keys
                          if k in ("count", "headcount", "current", "occupancy")
                          and isinstance(obj[keys[k]], int)), None)
@@ -96,6 +107,8 @@ def extract(obj, out=None):
                 pct = round(100.0 * head / cap, 1)
             else:
                 pct = _to_pct(obj[crowd_k])
+                if pct is None and level:
+                    pct = _to_pct(level)
             if pct is not None or level is not None:
                 out.append({"venue": obj[name_k].strip(), "pct": pct,
                             "level": level, "headcount": head, "capacity": cap})
